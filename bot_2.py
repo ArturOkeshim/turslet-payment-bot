@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
+
+import gspread
+from google.oauth2.service_account import Credentials
+
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, StateFilter
@@ -11,6 +14,9 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message
 from dotenv import load_dotenv
+
+import phonenumbers 
+from phonenumbers import NumberParseException
 
 
 load_dotenv()
@@ -23,19 +29,30 @@ if not BOT_TOKEN:
 class Registration(StatesGroup):
     waiting_phone = State()
 
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+creds = Credentials.from_service_account_file("turslet-bot-590950884fe3.json", scopes=SCOPES)
+gc = gspread.authorize(creds)
+spreadsheet = gc.open_by_key("1revQXTsZhrO-4ZU8ywMVC4j2MiShpFF-Dq-uk5Gy9Po")
+worksheet = spreadsheet.worksheet("Лист1")
 
 dp = Dispatcher(storage=MemoryStorage())
 
 
 def normalize_phone(text: str) -> str | None:
-    digits = re.sub(r"\D", "", text)
-    if len(digits) == 11 and digits.startswith("8"):
-        digits = "7" + digits[1:]
-    if len(digits) == 11 and digits.startswith("7"):
-        return f"+{digits}"
-    if len(digits) == 10:
-        return f"+7{digits}"
-    return None
+    try:
+        parsed_number = phonenumbers.parse(text, "RU")
+    except NumberParseException:
+        return None
+
+    if not phonenumbers.is_valid_number(parsed_number):
+        return None
+
+    return phonenumbers.format_number(
+        parsed_number, phonenumbers.PhoneNumberFormat.E164
+    )
 
 
 @dp.message(CommandStart())
@@ -48,8 +65,8 @@ async def start_handler(message: Message, state: FSMContext) -> None:
             f"{first_name}, привет! Турслет стал больше, и мы решили немного автоматизировать проверку оплат."
         )
         await message.answer(
-            "Можешь, пожалуйста, написать следующим сообщением свой номер телефона "
-            "в формате +7 964 532 83 25?\n"
+            "Можешь, пожалуйста, написать следующим сообщением свой номер телефона"
+            "в формате +7 999 888 77 66?\n"
             "Это поможет нам точно понять, кто ты из участников."
         )
         await state.set_state(Registration.waiting_phone)
@@ -62,8 +79,8 @@ async def telephone_number_handler(message: Message, state: FSMContext) -> None:
     phone = normalize_phone(message.text.strip())
     if not phone:
         await message.answer(
-            "Не получилось разобрать номер. Пришли, пожалуйста, в формате +7 964 532 83 25 "
-            "или 89645328325."
+            "Не получилось разобрать номер."
+            "Пришли, пожалуйста, номер текстом в формате +7 999 888 77 66"
         )
         return
     # здесь: сохранить в БД message.from_user.id -> phone
@@ -77,4 +94,5 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    #asyncio.run(main())
+    pass
