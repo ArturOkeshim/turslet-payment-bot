@@ -3,10 +3,6 @@ from __future__ import annotations
 import asyncio
 import os
 
-import gspread
-from google.oauth2.service_account import Credentials
-
-
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
@@ -17,6 +13,7 @@ from dotenv import load_dotenv
 
 import phonenumbers 
 from phonenumbers import NumberParseException
+from google_sheets_client import GoogleSheetsClient
 
 
 load_dotenv()
@@ -29,14 +26,7 @@ if not BOT_TOKEN:
 class Registration(StatesGroup):
     waiting_phone = State()
 
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
-]
-creds = Credentials.from_service_account_file("turslet-bot-590950884fe3.json", scopes=SCOPES)
-gc = gspread.authorize(creds)
-spreadsheet = gc.open_by_key("1revQXTsZhrO-4ZU8ywMVC4j2MiShpFF-Dq-uk5Gy9Po")
-worksheet = spreadsheet.worksheet("Лист1")
+sheets_client = GoogleSheetsClient.from_env()
 
 dp = Dispatcher(storage=MemoryStorage())
 
@@ -83,8 +73,17 @@ async def telephone_number_handler(message: Message, state: FSMContext) -> None:
             "Пришли, пожалуйста, номер текстом в формате +7 999 888 77 66"
         )
         return
-    # здесь: сохранить в БД message.from_user.id -> phone
-    await message.answer(f"Принял номер: {phone}. Спасибо!")
+
+    target_row = sheets_client.find_phone_row_in_column(phone)
+    if target_row is None:
+        await message.answer(
+            "Не нашел этот номер в таблице. Проверь формат и номер, "
+            "или свяжись с организатором."
+        )
+        return
+
+    sheets_client.save_chat_id_on_telephone(target_row, str(message.chat.id))
+    await message.answer(f"Принял номер: {phone}. Спасибо! Данные обновлены.")
     await state.clear()
 
 

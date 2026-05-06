@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from operator import index
 import os
 from typing import Optional
 
@@ -46,6 +47,10 @@ class GoogleSheetsClient:
         )
         gc = gspread.authorize(creds)
         spreadsheet = gc.open_by_key(spreadsheet_id)
+        self.gender_column = 4
+        self.phone_column = 7
+        self.chat_id_column = 13
+        self.index_column = 16
         self.worksheet = spreadsheet.worksheet(sheet_name)
 
     @classmethod
@@ -61,26 +66,39 @@ class GoogleSheetsClient:
             service_account_file=service_account_file,
         )
 
-    def find_phone_row_in_column_g(self, phone: str) -> Optional[int]:
+    def find_phone_row_in_column(self, phone: str) -> Optional[int]:
         target_phone = _normalize_phone(phone)
         if not target_phone:
             return None
 
-        values = self.worksheet.col_values(7)
+        values = self.worksheet.col_values(self.phone_column)
         for row_index, raw_value in enumerate(values, start=1):
             candidate_phone = _normalize_phone(raw_value)
             if candidate_phone == target_phone:
                 return row_index
 
         return None
+    def index_boys_n_girls(self):
+        boys_count = 0
+        girls_count = 0
+        genders = self.worksheet.col_values(self.gender_column)
+        for row_index, raw_value in enumerate(genders, start=1):
+            match raw_value.strip():
+                case "Мужской":
+                    boys_count += 1
+                    self.worksheet.update_cell(row_index, self.index_column, boys_count)
+                case "Женский":
+                    girls_count += 1
+                    self.worksheet.update_cell(row_index, self.index_column, girls_count)
+                case _:
+                    continue        
+        return
+        
+    def save_chat_id_on_telephone(self, target_row: int, chat_id:str):
+        self.worksheet.update_cell(target_row, self.chat_id_column, chat_id)
 
 
 if __name__ == "__main__":
-    client = GoogleSheetsClient.from_env()
-    test_phone = "+7-985-055-22-00"
-    found_row = client.find_phone_row_in_column_g(test_phone)
 
-    if found_row is None:
-        print(f"Телефон {test_phone} не найден в колонке G")
-    else:
-        print(f"Телефон {test_phone} найден в строке {found_row}")
+    client = GoogleSheetsClient.from_env()
+    client.index_boys_n_girls()
