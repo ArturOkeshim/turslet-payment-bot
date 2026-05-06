@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -18,6 +21,7 @@ from google_sheets_client import GoogleSheetsClient
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+RETRY_DELAY_SECONDS = 5
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing in .env")
@@ -88,10 +92,31 @@ async def telephone_number_handler(message: Message, state: FSMContext) -> None:
 
 
 async def main() -> None:
-    bot = Bot(token=BOT_TOKEN)
-    await dp.start_polling(bot)
+    session = AiohttpSession(timeout=30)
+    bot = Bot(token=BOT_TOKEN, session=session)
+    while True:
+        try:
+            await dp.start_polling(bot)
+            break
+        except TelegramNetworkError as error:
+            logging.warning(
+                "Telegram network error: %s. Retrying in %s seconds...",
+                error,
+                RETRY_DELAY_SECONDS,
+            )
+            await asyncio.sleep(RETRY_DELAY_SECONDS)
+        except asyncio.TimeoutError:
+            logging.warning(
+                "Timeout while contacting Telegram API. Retrying in %s seconds...",
+                RETRY_DELAY_SECONDS,
+            )
+            await asyncio.sleep(RETRY_DELAY_SECONDS)
 
 
 if __name__ == "__main__":
-    #asyncio.run(main())
-    pass
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    asyncio.run(main())
+
