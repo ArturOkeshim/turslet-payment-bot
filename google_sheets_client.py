@@ -66,6 +66,18 @@ class GoogleSheetsClient:
             service_account_file=service_account_file,
         )
 
+    def find_сhat_id_in_column(self, chat_id: str) -> Optional[int]:
+        if not chat_id:
+            return None
+
+        values = self.worksheet.col_values(self.chat_id_column)
+        for _, raw_value in enumerate(values, start=1):
+            candidate_chat_id = raw_value.strip()
+            if candidate_chat_id == chat_id:
+                return True
+
+        return False
+
     def find_phone_row_in_column(self, phone: str) -> Optional[int]:
         target_phone = _normalize_phone(phone)
         if not target_phone:
@@ -94,8 +106,13 @@ class GoogleSheetsClient:
                     continue        
         return
         
-    def save_chat_id_on_telephone(self, target_row: int, chat_id:str):
+    def save_chat_id_on_telephone(self, target_row: int, chat_id: str) -> bool:
+        existing_chat_id = self.worksheet.cell(target_row, self.chat_id_column).value
+        if existing_chat_id and existing_chat_id.strip():
+            return False
+
         self.worksheet.update_cell(target_row, self.chat_id_column, chat_id)
+        return True
 
 
 if __name__ == "__main__":
