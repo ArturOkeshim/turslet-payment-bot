@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from operator import index
-import os
 from typing import Optional
 
 import gspread
@@ -47,8 +45,12 @@ class GoogleSheetsClient:
         )
         gc = gspread.authorize(creds)
         spreadsheet = gc.open_by_key(spreadsheet_id)
+        self.registration_time_column = 1
+        self.surname_column = 2
+        self.name_column = 3
         self.gender_column = 4
         self.phone_column = 7
+        self.username_column = 8
         self.chat_id_column = 13
         self.index_column = 16
         self.worksheet = spreadsheet.worksheet(sheet_name)
@@ -66,9 +68,9 @@ class GoogleSheetsClient:
             service_account_file=service_account_file,
         )
 
-    def find_сhat_id_in_column(self, chat_id: str) -> Optional[int]:
+    def find_сhat_id_in_column(self, chat_id: str) -> bool:
         if not chat_id:
-            return None
+            return False
 
         values = self.worksheet.col_values(self.chat_id_column)
         for _, raw_value in enumerate(values, start=1):
@@ -77,6 +79,23 @@ class GoogleSheetsClient:
                 return True
 
         return False
+
+    def find_username_row_in_column(self, username: str) -> Optional[int]:
+        normalized_username = username.strip().lstrip("@").lower()
+        if not normalized_username:
+            return None
+
+        values = self.worksheet.col_values(self.username_column)
+        matched_rows: list[int] = []
+        for row_index, raw_value in enumerate(values, start=1):
+            candidate_username = raw_value.strip().lstrip("@").lower()
+            if candidate_username == normalized_username:
+                matched_rows.append(row_index)
+
+        if len(matched_rows) != 1:
+            return None
+
+        return matched_rows[0]
 
     def find_phone_row_in_column(self, phone: str) -> Optional[int]:
         target_phone = _normalize_phone(phone)
@@ -113,6 +132,16 @@ class GoogleSheetsClient:
 
         self.worksheet.update_cell(target_row, self.chat_id_column, chat_id)
         return True
+
+    def get_participant_info(self, target_row: int) -> dict[str, str]:
+        first_name = (self.worksheet.cell(target_row, self.name_column).value or "").strip()
+        last_name = (self.worksheet.cell(target_row, self.surname_column).value or "").strip()
+        phone = (self.worksheet.cell(target_row, self.phone_column).value or "").strip()
+        return {
+            "first_name": first_name,
+            "last_name": last_name,
+            "phone": phone,
+        }
 
 
 if __name__ == "__main__":

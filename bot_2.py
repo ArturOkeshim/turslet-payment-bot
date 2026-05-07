@@ -13,7 +13,7 @@ from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message
+from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from dotenv import load_dotenv
 
 import phonenumbers 
@@ -34,6 +34,7 @@ if not BOT_TOKEN:
 
 
 class Registration(StatesGroup):
+    waiting_identity_confirmation = State()
     waiting_phone = State()
     waiting_payment_proof = State()
     all_done = State()
@@ -57,23 +58,101 @@ def normalize_phone(text: str) -> str | None:
     )
 
 
+async def ask_for_payment_proof(message: Message, state: FSMContext) -> None:
+    await state.set_state(Registration.waiting_payment_proof)
+    await message.answer(
+        "Необходимо оплатить участие в турслете в течение 24 часов с момента регистрации.\n"
+        "Переведи 1 рубль на Сбербанк по номеру +7 964 532 83 25 (Артем Мищенко)\n"
+        "Для подтверждения пришли в чат чек в виде документа",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+
 @dp.message(CommandStart())
 async def start_handler(message: Message, state: FSMContext) -> None:
     await state.clear()
-    check_chat_id_in_db = False # здесь будем проверять, есть ли у нас этот пользователь в базе.
-    if not check_chat_id_in_db:
-        first_name = message.from_user.first_name or "Участник"
+    chat_id = str(message.chat.id)
+    first_name = message.from_user.first_name or "Участник"
+    await message.answer(
+        f"{first_name}, привет! Турслет стал больше, и мы решили немного автоматизировать проверку оплат."
+    )
+
+    if sheets_client.find_сhat_id_in_column(chat_id):
+        await message.answer("Вы уже зарегистрированы. Пришлите чек в виде PDF-документа.")
+        await state.set_state(Registration.waiting_payment_proof)
+        return
+
+    username = (message.from_user.username or "").strip()
+    if username:
+        target_row = sheets_client.find_username_row_in_column(username)
+        if target_row is not None:
+            participant = sheets_client.get_participant_info(target_row)
+            full_name = f"{participant['first_name']} {participant['last_name']}".strip()
+            display_name = full_name or "участник"
+            phone = participant["phone"] or "не указан"
+            await state.set_state(Registration.waiting_identity_confirmation)
+            await message.answer(
+                f"Нашел тебя в списках: {display_name}, телефон: {phone}.\nЭто ты?",
+                reply_markup=ReplyKeyboardMarkup(
+                    keyboard=[[KeyboardButton(text="Да"), KeyboardButton(text="Нет")]],
+                    resize_keyboard=True,
+                    one_time_keyboard=True,
+                ),
+            )
+            return
+
+    await message.answer(
+        "Можешь, пожалуйста, написать следующим сообщением свой номер телефона"
+        " в формате +7 XXX XXX XX XX?\n"
+        "Это поможет нам точно понять, кто ты из участников."
+    )
+    await state.set_state(Registration.waiting_phone)
+
+
+@dp.message(StateFilter(Registration.waiting_identity_confirmation), F.text.casefold() == "да")
+async def identity_confirmation_yes_handler(message: Message, state: FSMContext) -> None:
+    username = (message.from_user.username or "").strip()
+    if not username:
         await message.answer(
-            f"{first_name}, привет! Турслет стал больше, и мы решили немного автоматизировать проверку оплат."
-        )
-        await message.answer(
-            "Можешь, пожалуйста, написать следующим сообщением свой номер телефона"
-            " в формате +7 XXX XXX XX XX?\n"
-            "Это поможет нам точно понять, кто ты из участников."
+            "Не вижу username в Telegram-профиле. Пришлите, пожалуйста, номер телефона в формате +7 XXX XXX XX XX.",
+            reply_markup=ReplyKeyboardRemove(),
         )
         await state.set_state(Registration.waiting_phone)
-    else:
-        await message.answer(f"{first_name}, еще раз привет!")
+        return
+
+    target_row = sheets_client.find_username_row_in_column(username)
+    if target_row is None:
+        await message.answer(
+            "Не удалось однозначно найти вас по username. Пришлите, пожалуйста, номер телефона в формате +7 XXX XXX XX XX.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        await state.set_state(Registration.waiting_phone)
+        return
+
+    was_saved = sheets_client.save_chat_id_on_telephone(target_row, str(message.chat.id))
+    if not was_saved:
+        await message.answer(
+            "Этот телефон уже зарегистрирован. Если это точно ваш телефон, напиши @artemmish.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+
+    await message.answer("Отлично, подтвердили личность.", reply_markup=ReplyKeyboardRemove())
+    await ask_for_payment_proof(message, state)
+
+
+@dp.message(StateFilter(Registration.waiting_identity_confirmation), F.text.casefold() == "нет")
+async def identity_confirmation_no_handler(message: Message, state: FSMContext) -> None:
+    await message.answer(
+        "Хорошо, тогда пришли номер телефона в формате +7 XXX XXX XX XX.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await state.set_state(Registration.waiting_phone)
+
+
+@dp.message(StateFilter(Registration.waiting_identity_confirmation))
+async def identity_confirmation_fallback_handler(message: Message) -> None:
+    await message.answer("Пожалуйста, выбери один из вариантов: Да или Нет.")
 
 
 @dp.message(StateFilter(Registration.waiting_phone), F.text)
@@ -104,13 +183,7 @@ async def telephone_number_handler(message: Message, state: FSMContext) -> None:
         return
 
     await message.answer(f"Принял номер: {phone}. Спасибо!")
-
-    await state.set_state(Registration.waiting_payment_proof)
-
-    await message.answer(f"Необходимо оплатить участие в турслете в течение 24 часов с момента регистрации.\n"
-    "Переведи 1 рубль на Сбербанк по номеру +7 964 532 83 25 (Артем Мищенко)\n"
-    "Для подтверждения пришли в чат чек в виде документа"
-    )
+    await ask_for_payment_proof(message, state)
 
 @dp.message(
     StateFilter(Registration.waiting_payment_proof),
@@ -151,6 +224,7 @@ async def check_handler(message: Message, state: FSMContext) -> None:
 @dp.message(StateFilter(Registration.waiting_payment_proof))
 async def check_handler_fallback(message: Message) -> None:
     await message.answer("Пришли чек в виде PDF-документа (не фото и не текст).")
+
 async def main() -> None:
     session = AiohttpSession(timeout=30, proxy=TELEGRAM_PROXY)
     if TELEGRAM_PROXY:
