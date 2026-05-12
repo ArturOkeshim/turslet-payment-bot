@@ -1,0 +1,41 @@
+# Установка (подставь свои пути и пользователя):
+#   sudo cp systemd/turslet-payment-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now turslet-payment-bot.service
+#
+# Логи: journalctl -u turslet-payment-bot.service -f
+
+[Unit]
+Description=Turslet payment Telegram bot (bot_2.py)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Пользователь без root (создай заранее: useradd -r -s /usr/sbin/nologin turslet)
+User=turslet
+Group=turslet
+
+# Корень проекта: здесь лежат bot_2.py, .env, turslet-bot-*.json
+WorkingDirectory=/opt/turslet-payment-bot
+
+# Чтобы строки сразу попадали в journalctl
+Environment=PYTHONUNBUFFERED=1
+
+# Подхватить BOT_TOKEN, TELEGRAM_PROXY и т.д. (формат KEY=value как в .env)
+# Знак "-" — не считать ошибкой, если файла нет
+EnvironmentFile=-/opt/turslet-payment-bot/.env
+
+# Интерпретатор из venv проекта
+ExecStart=/opt/turslet-payment-bot/venv/bin/python /opt/turslet-payment-bot/bot_2.py
+
+Restart=on-failure
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=turslet-payment-bot
+
+[Install]
+WantedBy=multi-user.target
