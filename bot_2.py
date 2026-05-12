@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 import phonenumbers 
 from phonenumbers import NumberParseException
 from extract_pdf_text import extract_text_from_pdf
-from google_sheets_client import GoogleSheetsClient
+from google_sheets_client import GoogleSheetsClient, RECEIPT_STATUS_SENT
 
 
 load_dotenv()
@@ -73,14 +73,23 @@ async def start_handler(message: Message, state: FSMContext) -> None:
     await state.clear()
     chat_id = str(message.chat.id)
     first_name = message.from_user.first_name or "Участник"
+
+    existing_row = sheets_client.find_row_by_chat_id(chat_id)
+    if existing_row is not None:
+        if sheets_client.get_conversation_status(existing_row) == RECEIPT_STATUS_SENT:
+            await message.answer(
+                "Вы уже зарегистрированы, чек мы получили. Если нужна помощь — напиши @artemmish."
+            )
+            await state.set_state(Registration.all_done)
+            return
+
+        await message.answer(f"{first_name}, Вы уже зарегистрированы.")
+        await ask_for_payment_proof(message, state)
+        return
+
     await message.answer(
         f"{first_name}, привет! Турслет стал больше, и мы решили немного автоматизировать проверку оплат."
     )
-
-    if sheets_client.find_сhat_id_in_column(chat_id):
-        await message.answer("Вы уже зарегистрированы. Пришлите чек в виде PDF-документа.")
-        await state.set_state(Registration.waiting_payment_proof)
-        return
 
     username = (message.from_user.username or "").strip()
     if username:
@@ -168,7 +177,7 @@ async def telephone_number_handler(message: Message, state: FSMContext) -> None:
     target_row = sheets_client.find_phone_row_in_column(phone)
     if target_row is None:
         await message.answer(
-            "Не нашел этот номер среди участников. Проверь формат (+7 XXX XXX XX XX) и номер. "
+            "Не нашел этот номер среди участников. Проверь формат +7 XXX XXX XX XX  и номер. "
             "Или напиши @artemmish."
         )
         return
@@ -217,6 +226,15 @@ async def check_handler(message: Message, state: FSMContext) -> None:
         )
         return
 
+    row_for_chat = sheets_client.find_row_by_chat_id(str(message.chat.id))
+    if row_for_chat is not None:
+        sheets_client.save_accepted_receipt(row_for_chat, extracted_text)
+    else:
+        logging.error(
+            "PDF accepted but no sheet row for chat_id=%s; status and text not saved",
+            message.chat.id,
+        )
+
     await message.answer("Оплата подтверждена, удачного участия в мероприятии!")
     await state.set_state(Registration.all_done)
 
@@ -248,6 +266,17 @@ async def main() -> None:
             )
             await asyncio.sleep(RETRY_DELAY_SECONDS)
 
+@dp.message()
+async def polite_answer(message: Message) -> None:
+    await message.answer(
+        "Отправьте команду /start, чтобы начать пользоваться ботом",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="/start")]],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        ),
+    )
+
 
 if __name__ == "__main__":
     logging.basicConfig(
@@ -255,4 +284,5 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     asyncio.run(main())
+
 

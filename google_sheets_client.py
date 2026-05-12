@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import gspread
@@ -12,6 +13,24 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
+
+# Статус в status_column после успешной приёмки PDF-чека
+RECEIPT_STATUS_SENT = "Прислал чек"
+
+# Лимит длины значения в одной ячейке Google Таблиц
+_GOOGLE_SHEETS_MAX_CELL_CHARS = 50_000
+
+
+def _cell_safe_text(text: str) -> str:
+    stripped = text.strip()
+    if len(stripped) <= _GOOGLE_SHEETS_MAX_CELL_CHARS:
+        return stripped
+    logging.warning(
+        "Текст чека обрезан до %s символов (лимит ячейки Sheets)",
+        _GOOGLE_SHEETS_MAX_CELL_CHARS,
+    )
+    suffix = "\n… [обрезано по лимиту ячейки]"
+    return stripped[: _GOOGLE_SHEETS_MAX_CELL_CHARS - len(suffix)] + suffix
 
 
 def _normalize_phone(value: str) -> str | None:
@@ -52,7 +71,10 @@ class GoogleSheetsClient:
         self.phone_column = 7
         self.username_column = 8
         self.chat_id_column = 13
+        self.status_column = 14
         self.index_column = 16
+        self.pdf_text_column = 17
+
         self.worksheet = spreadsheet.worksheet(sheet_name)
 
     @classmethod
@@ -68,17 +90,29 @@ class GoogleSheetsClient:
             service_account_file=service_account_file,
         )
 
-    def find_сhat_id_in_column(self, chat_id: str) -> bool:
+    def find_row_by_chat_id(self, chat_id: str) -> Optional[int]:
         if not chat_id:
-            return False
+            return None
 
         values = self.worksheet.col_values(self.chat_id_column)
-        for _, raw_value in enumerate(values, start=1):
-            candidate_chat_id = raw_value.strip()
-            if candidate_chat_id == chat_id:
-                return True
+        for row_index, raw_value in enumerate(values, start=1):
+            if raw_value.strip() == chat_id:
+                return row_index
 
-        return False
+        return None
+
+    def find_сhat_id_in_column(self, chat_id: str) -> bool:
+        return self.find_row_by_chat_id(chat_id) is not None
+
+    def get_conversation_status(self, target_row: int) -> str:
+        value = self.worksheet.cell(target_row, self.status_column).value
+        return (value or "").strip()
+
+    def save_accepted_receipt(self, target_row: int, extracted_text: str) -> None:
+        """Статус «Прислал чек» и полный извлечённый из PDF текст в pdf_text_column."""
+        safe_text = _cell_safe_text(extracted_text)
+        self.worksheet.update_cell(target_row, self.status_column, RECEIPT_STATUS_SENT)
+        self.worksheet.update_cell(target_row, self.pdf_text_column, safe_text)
 
     def find_username_row_in_column(self, username: str) -> Optional[int]:
         normalized_username = username.strip().lstrip("@").lower()
